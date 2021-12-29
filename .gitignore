@@ -1,4 +1,10 @@
 *.jl.cov
 *.jl.*.cov
 *.jl.mem
-deps/deps.jl
+
+.old/
+.expand/
+*.txt
+*.csv
+*.pdf
+*.eps

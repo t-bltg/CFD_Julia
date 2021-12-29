@@ -8,15 +8,15 @@ ns = 20
 tf = .01
 gamma = 1.4
 
-solution = readdlm("solution_d.txt")  # , datarow = 3, type=Float64)
+solution = readdlm("../09_Euler_1D_Roe/solution_d.txt")  # , datarow = 3, type=Float64)
 xd = solution[:, 1]
 ud = solution[:, 2:ns+2]
 
-solution = readdlm("solution_v.txt")  # , datarow = 3, type=Float64)
+solution = readdlm("../09_Euler_1D_Roe/solution_v.txt")  # , datarow = 3, type=Float64)
 xv = solution[:, 1]
 uv = solution[:, 2:ns+2]
 
-solution = readdlm("solution_e.txt")  # , datarow = 3, type=Float64)
+solution = readdlm("../09_Euler_1D_Roe/solution_e.txt")  # , datarow = 3, type=Float64)
 xe = solution[:, 1]
 ue = solution[:, 2:ns+2]
 
@@ -30,15 +30,15 @@ for i ∈ 1:nx for j ∈ 1:ns + 1
   ue[i, j] = ue[i, j] / ud[i, j]
 end end
 
-solution = readdlm("../10_Euler_1D_HLLC/solution_dF.txt")  # , datarow = 3, type=Float64)
+solution = readdlm("solution_dF.txt")  # , datarow = 3, type=Float64)
 xdF = solution[:, 1]
 udF = solution[:, 2:ns+2]
 
-solution = readdlm("../10_Euler_1D_HLLC/solution_vF.txt")  # , datarow = 3, type=Float64)
+solution = readdlm("solution_vF.txt")  # , datarow = 3, type=Float64)
 xvF = solution[:, 1]
 uvF = solution[:, 2:ns+2]
 
-solution = readdlm("../10_Euler_1D_HLLC/solution_eF.txt")  # , datarow = 3, type=Float64)
+solution = readdlm("solution_eF.txt")  # , datarow = 3, type=Float64)
 xeF = solution[:, 1]
 ueF = solution[:, 2:ns+2]
 
@@ -69,7 +69,7 @@ ax1.legend(fontsize=14, loc=1)
 ax2.plot(xvF, uvF[:, ns+1], lw=4, color="black", label="True")
 ax2.plot(xv, uv[:, ns+1], lw=2, color="red", marker="o", markersize=4, label="Low-resolution")
 ax2.set_xlabel("\$x\$")
-ax2.set_ylabel("\$v\$")
+ax2.set_ylabel("\$u\$")
 ax2.set_title("Velocity")
 ax2.set_xlim(0, 1)
 ax2.legend(fontsize=14, loc=0)
@@ -96,4 +96,4 @@ ax4.legend(fontsize=14, loc=0)
 # plt[:subplot](ax4)
 
 fig.tight_layout()
-fig.savefig("euler_1D.pdf")
+fig.savefig("euler_1D_gudanov.pdf")

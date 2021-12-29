@@ -1,106 +1,81 @@
-using CPUTime
+include("../Common.jl")
+using .Common
+using BenchmarkTools
+using Unroll
 using Printf
-using Plots
+using Utils
 
-function compute_l2norm(nx,r)
+numerical(nx, nt, dx, dt, x, u_n, α) = begin
+  a, b, c, r = (similar(x) for _ ∈ 1:4)
 
-    rms = 0.0
+  for k ∈ 2:nt + 1
+    uv = view(u_n, :, k - 1)
+    uv[begin], uv[end] = 0., 0.
 
-    for i = 2:nx
-        rms = rms + r[i]^2
+    @unroll begin
+      r[2:nx] = (
+        - 2. / (α * dt) * (uv[3:nx+1] + 10uv[2:nx] + uv[1:nx-1])
+        - 12. / dx^2 * (uv[3:nx+1] - 2uv[2:nx] + uv[1:nx-1])
+      )
+      a[2:nx] = +12 / dx^2 - 2 / (α * dt)
+      b[2:nx] = -24 / dx^2 - 20 / (α * dt)
+      c[2:nx] = +12 / dx^2 - 2 / (α * dt)
     end
+    a[begin], b[begin], c[begin], r[begin] = 0., 1., 0., 0.
+    a[end], b[end], c[end], r[end] = 0., 1., 0., 0.
 
-    rms = sqrt(rms/((nx-1)))
-    return rms
+    tdma(a, b, c, r, view(u_n, :, k), 1, nx)
+  end
 end
 
-function tdma(a,b,c,r,s,e)
-    up = Array{Float64}(undef, nx+1)
-    for i = s+1:e+1
-        b[i] = b[i] - a[i]*(c[i-1]/b[i-1])
-        r[i] = r[i] - a[i]*(r[i-1]/b[i-1])
+main() = begin
+  x_l, x_r = -1., 1.
+  dx = .025
+  nx = Int((x_r - x_l) / dx)
+
+  t, dt = 1., .0025
+  nt = Int(t / dt)
+
+  α = 1. / π^2
+
+  x = Array{Float64}(undef, nx + 1)
+  tlist = Array{Float64}(undef, nt + 1)
+  u_n = Array{Float64}(undef, nx + 1, nt + 1)
+  u_e = similar(x)
+
+  for i ∈ 1:nx + 1
+    x[i] = x_l + dx * (i - 1)  # location of each grid point
+    u_n[i, begin] = -sin(π * x[i])  # initial condition @ t=0
+    u_e[i] = -exp(-t) * sin(π * x[i])  # initial condition @ t=0
+  end
+
+  if boolenv("BENCH")
+    @btime numerical($nx, $nt, $dx, $dt, $x, $u_n, $α)
+  else
+    @time numerical(nx, nt, dx, dt, x, u_n, α)
+  end
+
+  u_error = u_n[:, nt+1] - u_e
+  rms_error = compute_l2norm(nx, u_error)
+
+  # create output file for L2-norm
+  open("output.txt", "w") do f
+    write(f, "Error details:\n")
+    write(f, "L-2 Norm=$(rms_error)\n")
+    write(f, "Maximum Norm=$(maximum(abs.(u_error)))\n")
+  end
+
+  # create text file for final field
+  open("field_final.csv", "w") do f
+    write(f, "x ue un uerror\n")
+    for i ∈ 1:nx + 1
+      write(f, "$(x[i]) $(u_e[i]) $(u_n[i, nt+1]) $(u_error[i])\n")
     end
-
-    up[e+1] = r[e+1]/b[e+1]
-
-    for i = e:-1:s
-        up[i] = (r[i] - c[i]*up[i+1])/b[i]
-    end
-    return up
+  end
+  run(`cat output.txt`)
+  return
 end
 
-x_l = -1.0
-x_r = 1.0
-dx = 0.025
-nx = Int64((x_r-x_l)/dx)
-
-dt = 0.0025
-t = 1.0
-nt = Int64(t/dt)
-
-α = 1/(pi*pi)
-
-x = Array{Float64}(undef, nx+1)
-tlist = Array{Float64}(undef, nt+1)
-u_e = Array{Float64}(undef, nx+1)
-u_n = Array{Float64}(undef, nt+1, nx+1)
-a = Array{Float64}(undef, nx+1)
-b = Array{Float64}(undef, nx+1)
-c = Array{Float64}(undef, nx+1)
-r = Array{Float64}(undef, nx+1)
-
-for i = 1:nx+1
-    x[i] = x_l + dx*(i-1)  # location of each grid point
-    u_n[1,i] = -sin(pi*x[i]) # initial condition @ t=0
-    u_e[i] = -exp(-t)*sin(pi*x[i]) # initial condition @ t=0
+if abspath(PROGRAM_FILE) == @__FILE__
+  main()
 end
-
-u_n[1,1] = 0.0
-u_n[1,nx+1] = 0.0
-
-s = 1
-e = nx
-
-for k = 2:nt+1
-    i = 1
-    a[i] = 0.0
-    b[i] = 1.0
-    c[i] = 0.0
-    r[i] = 0.0
-    for i = 2:nx
-        a[i] = 12.0/(dx*dx)-2.0/(α*dt)
-        b[i] = -24.0/(dx*dx) - 20.0/(α*dt)
-        c[i] = 12.0/(dx*dx)-2.0/(α*dt)
-        r[i] = -2.0/(α*dt)*(u_n[k-1,i+1] + 10.0*u_n[k-1,i] + u_n[k-1,i-1]) -
-                12.0/(dx*dx)*(u_n[k-1,i+1] - 2.0*u_n[k-1,i] + u_n[k-1,i-1])
-    end
-    i = nx+1
-    a[i] = 0.0
-    b[i] = 1.0
-    c[i] = 0.0
-    r[i] = 0.0
-    u_n[k,:] = tdma(a,b,c,r,s,e)
-end
-
-u_error = zeros(nx+1)
-u_error = u_n[nt+1,:] - u_e
-rms_error = compute_l2norm(nx, u_error)
-max_error = maximum(abs.(u_error))
-
-# create output file for L2-norm
-output = open("output.txt", "w");
-write(output, "Error details: \n");
-write(output, "L-2 Norm = ", string(rms_error), " \n");
-write(output, "Maximum Norm = ", string(max_error), " \n");
-
-# create text file for final field
-field_final = open("field_final.csv", "w");
-write(field_final, "x"," ", "ue", " ", "un", " ", "uerror" ," \n")
-
-for i = 1:nx+1
-    write(field_final, @sprintf("%.16f",x[i])," ",@sprintf("%.16f", u_e[i])," ",
-          @sprintf("%.16f", u_n[nt+1,i])," ",@sprintf("%.16f", u_error[i])," \n")
-end
-
-close(field_final)
-close(output);

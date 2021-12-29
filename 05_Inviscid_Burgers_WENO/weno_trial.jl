@@ -1,278 +1,111 @@
-using CPUTime
-using Printf
-using Plots
-font = Plots.font("Times New Roman", 18)
-pyplot(guidefont=font, xtickfont=font, ytickfont=font, legendfont=font)
+include("../Common.jl")
+using .Common
+using BenchmarkTools
+using Unroll
+using Utils
 
-#-----------------------------------------------------------------------------#
-# Compute L-2 norm for a vector
-#-----------------------------------------------------------------------------#
-function compute_l2norm(nx,r)
-    rms = 0.0
-    for i = 2:nx
-        rms = rms + r[i]^2
-    end
-    rms = sqrt(rms/((nx-1)))
-    return rms
-end
-
-#-----------------------------------------------------------------------------#
+# -----------------------------------------------------------------------------#
 # Compute numerical solution
 #   - Time integration using Runge-Kutta third order
 #   - 5th-order Compact WENO scheme for spatial terms
-#-----------------------------------------------------------------------------#
-function numerical(nx,ns,nt,dx,dt,u)
-    x = Array{Float64}(undef, nx+1)
-    un = Array{Float64}(undef, nx+1) # numerical solsution at every time step
-    ut = Array{Float64}(undef, nx+1) # temporary array during RK3 integration
-    r = Array{Float64}(undef, nx)
+# -----------------------------------------------------------------------------#
+numerical(nx, ns, nt, Δx, Δt, u) = begin
+  x = Array{Float64}(undef, nx + 1)
+  un = similar(x)  # numerical solution at every time step
+  ut = similar(x)  # temporary array during RK3 integration
+  r = Array{Float64}(undef, nx)
+  uL = Array{Float64}(undef, nx)
+  uR = Array{Float64}(undef, nx + 1)
 
-    k = 1 # record index
-    freq = Int64(nt/ns)
+  k = 1  # record index
+  freq = nt ÷ ns
 
-    for i = 1:nx+1
-        x[i] = dx*(i-1)
-        un[i] = sin(2.0*pi*x[i])
-        u[i,k] = un[i] # store solution at t=0
+  for i ∈ 1:nx + 1
+    x[i] = Δx * (i - 1)
+    un[i] = sin(2π * x[i])
+    u[i, k] = un[i]  # store solution at t=0
+  end
+
+  # dirichlet boundary condition
+  u[begin, k], u[end, k] = 0., 0.
+  un[begin], un[end] = 0., 0.
+
+  # dirichlet boundary condition for temporary array
+  ut[begin], ut[end] = 0., 0.
+
+  for j ∈ 1:nt
+    rhs(nx, Δx, un, uL, uR, r)
+
+    @unroll ut[2:nx] = un[2:nx] + Δt * r[2:nx]
+
+    rhs(nx, Δx, ut, uL, uR, r)
+
+    @unroll ut[2:nx] = .75un[2:nx] + .25ut[2:nx] + .25Δt * r[2:nx]
+
+    rhs(nx, Δx, ut, uL, uR, r)
+
+    @unroll un[2:nx] = (1 / 3) * un[2:nx] + (2 / 3) * ut[2:nx] + (2 / 3) * Δt * r[2:nx]
+
+    if mod(j, freq) == 0
+      # println(j * Δt)
+      u[:, k] = un
+      k += 1
     end
-
-    # dirichlet boundary condition
-    u[1,k], u[nx+1,k] = 0.0, 0.0
-    un[1] = 0.0
-    un[nx+1] = 0.0
-
-    # dirichlet boundary condition for temporary array
-    ut[1] = 0.0
-    ut[nx+1] = 0.0
-
-    for j = 1:nt
-        rhs(nx,dx,un,r)
-
-        for i = 2:nx
-            ut[i] = un[i] + dt*r[i]
-        end
-
-        rhs(nx,dx,ut,r)
-
-        for i = 2:nx
-            ut[i] = 0.75*un[i] + 0.25*ut[i] + 0.25*dt*r[i]
-        end
-
-        rhs(nx,dx,ut,r)
-
-        for i = 2:nx
-            un[i] = (1.0/3.0)*un[i] + (2.0/3.0)*ut[i] + (2.0/3.0)*dt*r[i]
-        end
-
-        if (mod(j,freq) == 0)
-            println(j*dt)
-            u[:,k] = un[:]
-            k = k+1
-        end
-    end
+  end
+  return
 end
 
-#-----------------------------------------------------------------------------#
+# -----------------------------------------------------------------------------#
 # Calculate right hand term of the inviscid Burgers equation
-# r = -u∂u/∂x
-#-----------------------------------------------------------------------------#
-function rhs(nx,dx,u,r)
-    uL = Array{Float64}(undef, nx)
-    uR = Array{Float64}(undef, nx+1)
+# r = -u⋅∂u/∂x
+# -----------------------------------------------------------------------------#
+rhs(nx, Δx, u, uL, uR, r) = begin
+  # wenoL(nx, u, uL)  # not used here (simple FTCS instead, for comparing with WENO)
+  # wenoR(nx, u, uR)
+  @unroll r[2:nx] = -u[2:nx] * (u[3:nx+1] - u[1:nx-1]) / (2. * Δx)
+  return
+end
 
-    wenoL(nx,u,uL)
+main() = begin
+  for nx ∈ (100, 200, 400)
+    ns, Δt, tm = 10, .0001, .25
 
-    wenoR(nx,u,uR)
+    Δx = 1. / nx
+    nt = Int(tm / Δt)
 
-    for i = 2:nx
-        if (u[i] >= 0.0)
-            r[i] = -u[i]*(u[i+1] - u[i-1])/(2.0*dx)
-            #r[i] = -(u[i+1]^2 - u[i-1]^2)/(2.0*dx)
-        else
-            r[i] = -u[i]*(u[i+1] - u[i-1])/(2.0*dx)
-            #r[i] = -(u[i+1]^2 - u[i-1]^2)/(2.0*dx)
+    u = Array{Float64}(undef, nx + 1, ns)
+
+    if boolenv("BENCH")
+      @btime numerical($nx, $ns, $nt, $Δx, $Δt, $u)
+    else
+      @time numerical(nx, ns, nt, Δx, Δt, u)
+    end
+
+    x = Array(0:Δx:1.)
+
+    open("solution_$nx.txt", "w") do io
+      for i ∈ 1:nx + 1
+        write(io, "$(x[i]) ")
+        for j ∈ 1:ns
+          write(io, "$(u[i, j]) ")
         end
+        write(io, "\n")
+      end
     end
+  end
 end
 
-#-----------------------------------------------------------------------------#
-# WENO reconstruction for upwind direction (positive; left to right)
-# u(i): solution values at finite difference grid nodes i = 1,...,N+1
-# f(j): reconstructed values at nodes j = i+1/2; j = 1,...,N
-#-----------------------------------------------------------------------------#
-function wenoL(n,u,f)
-    a = Array{Float64}(undef, n)
-    b = Array{Float64}(undef, n)
-    c = Array{Float64}(undef, n)
-    r = Array{Float64}(undef, n)
-
-    i = 1
-    v1 = 3.0*u[i] - 2.0*u[i+1]
-    v2 = 2.0*u[i] - u[i+1]
-    v3 = u[i]
-    v4 = u[i+1]
-    v5 = u[i+2]
-    f[i] = wcL(v1,v2,v3,v4,v5)
-
-    i = 2
-    v1 = 2.0*u[i-1] - u[i]
-    v2 = u[i-1]
-    v3 = u[i]
-    v4 = u[i+1]
-    v5 = u[i+2]
-    f[i] = wcL(v1,v2,v3,v4,v5)
-
-    for i = 3:n-1
-        v1 = u[i-2]
-        v2 = u[i-1]
-        v3 = u[i]
-        v4 = u[i+1]
-        v5 = u[i+2]
-        f[i] = wcL(v1,v2,v3,v4,v5)
-    end
-
-    i = n
-    v1 = u[i-2]
-    v2 = u[i-1]
-    v3 = u[i]
-    v4 = u[i+1]
-    v5 = 2.0*u[i+1]-u[i]
-    f[i] = wcL(v1,v2,v3,v4,v5)
-
+if abspath(PROGRAM_FILE) == @__FILE__
+  main()
 end
 
-#-----------------------------------------------------------------------------#
-# CRWENO reconstruction for downwind direction (negative; right to left)
-# u(i): solution values at finite difference grid nodes i = 1,...,N+1
-# f(j): reconstructed values at nodes j = i-1/2; j = 2,...,N+1
-#-----------------------------------------------------------------------------#
-function wenoR(n,u,f)
-    a = Array{Float64}(undef, n+1)
-    b = Array{Float64}(undef, n+1)
-    c = Array{Float64}(undef, n+1)
-    r = Array{Float64}(undef, n+1)
+#####################
+# OBSOLETE/COMMENTS #
+#####################
 
-    i = 2
-    v1 = 2.0*u[i-1] - u[i]
-    v2 = u[i-1]
-    v3 = u[i]
-    v4 = u[i+1]
-    v5 = u[i+2]
-    f[i] = wcR(v1,v2,v3,v4,v5)
-
-
-    for i = 3:n-1
-        v1 = u[i-2]
-        v2 = u[i-1]
-        v3 = u[i]
-        v4 = u[i+1]
-        v5 = u[i+2]
-        f[i] = wcR(v1,v2,v3,v4,v5)
-    end
-
-    i = n
-    v1 = u[i-2]
-    v2 = u[i-1]
-    v3 = u[i]
-    v4 = u[i+1]
-    v5 = 2.0*u[i+1] - u[i]
-    f[i] = wcR(v1,v2,v3,v4,v5)
-
-    i = n+1
-    v1 = u[i-2]
-    v2 = u[i-1]
-    v3 = u[i]
-    v4 = 2.0*u[i] - u[i-1]
-    v5 = 3.0*u[i] - 2.0*u[i-1]
-    f[i] = wcR(v1,v2,v3,v4,v5)
-
-end
-
-#---------------------------------------------------------------------------#
-#nonlinear weights for upwind direction
-#---------------------------------------------------------------------------#
-function wcL(v1,v2,v3,v4,v5)
-    eps = 1.0e-6
-
-    # smoothness indicators
-    s1 = (13.0/12.0)*(v1-2.0*v2+v3)^2 + 0.25*(v1-4.0*v2+3.0*v3)^2
-    s2 = (13.0/12.0)*(v2-2.0*v3+v4)^2 + 0.25*(v2-v4)^2
-    s3 = (13.0/12.0)*(v3-2.0*v4+v5)^2 + 0.25*(3.0*v3-4.0*v4+v5)^2
-
-    # computing nonlinear weights w1,w2,w3
-    c1 = 1.0e-1/((eps+s1)^2)
-    c2 = 6.0e-1/((eps+s2)^2)
-    c3 = 3.0e-1/((eps+s3)^2)
-
-    w1 = c1/(c1+c2+c3)
-    w2 = c2/(c1+c2+c3)
-    w3 = c3/(c1+c2+c3)
-
-    # candiate stencils
-    q1 = v1/3.0 - 7.0/6.0*v2 + 11.0/6.0*v3
-    q2 =-v2/6.0 + 5.0/6.0*v3 + v4/3.0
-    q3 = v3/3.0 + 5.0/6.0*v4 - v5/6.0
-
-    # reconstructed value at interface
-    f = (w1*q1 + w2*q2 + w3*q3)
-
-    return f
-
-end
-
-#---------------------------------------------------------------------------#
-#nonlinear weights for downwind direction
-#---------------------------------------------------------------------------#
-function wcR(v1,v2,v3,v4,v5)
-    eps = 1.0e-6
-
-    s1 = (13.0/12.0)*(v1-2.0*v2+v3)^2 + 0.25*(v1-4.0*v2+3.0*v3)^2
-    s2 = (13.0/12.0)*(v2-2.0*v3+v4)^2 + 0.25*(v2-v4)^2
-    s3 = (13.0/12.0)*(v3-2.0*v4+v5)^2 + 0.25*(3.0*v3-4.0*v4+v5)^2
-
-    c1 = 3.0e-1/(eps+s1)^2
-    c2 = 6.0e-1/(eps+s2)^2
-    c3 = 1.0e-1/(eps+s3)^2
-
-    w1 = c1/(c1+c2+c3)
-    w2 = c2/(c1+c2+c3)
-    w3 = c3/(c1+c2+c3)
-
-    # candiate stencils
-    q1 =-v1/6.0      + 5.0/6.0*v2 + v3/3.0
-    q2 = v2/3.0      + 5.0/6.0*v3 - v4/6.0
-    q3 = 11.0/6.0*v3 - 7.0/6.0*v4 + v5/3.0
-
-    # reconstructed value at interface
-    f = (w1*q1 + w2*q2 + w3*q3)
-
-end
-
-#---------------------------------------------------------------------------#
-# main program
-#---------------------------------------------------------------------------#
-nx = 200
-ns = 10
-dt = 0.0001
-tm = 0.25
-
-dx = 1.0/nx
-nt = Int64(tm/dt)
-ds = tm/ns
-
-u = Array{Float64}(undef, nx+1, ns)
-numerical(nx,ns,nt,dx,dt,u)
-
-x = Array(0:dx:1.0)
-
-solution = open("solution.txt", "w")
-
-for i = 1:nx+1
-    write(solution, string(x[i]), " ",)
-    for j = 1:ns
-        write(solution, string(u[i,j]), " ")
-    end
-    write(solution, "\n",)
-end
-
-close(solution)
+# if ()
+#   # r[i] = -(u[i+1]^2 - u[i-1]^2)/(2.*Δx)
+# else
+#   r[i] = -u[i] * () / (2. * Δx)
+#   # r[i] = -(u[i+1]^2 - u[i-1]^2)/(2.*Δx)
+# end
